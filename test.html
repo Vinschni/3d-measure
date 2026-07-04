@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>STL Parser Test</title>
+    <style>
+        body {
+            font-family: monospace;
+            background: #1e1e1e;
+            color: #e0e0e0;
+            padding: 20px;
+            margin: 0;
+        }
+        .test-result {
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 4px;
+            border-left: 3px solid #4a90e2;
+        }
+        .success {
+            background: #2d4d2d;
+            border-left-color: #4caf50;
+        }
+        .error {
+            background: #4d2d2d;
+            border-left-color: #ff6b6b;
+        }
+    </style>
+</head>
+<body>
+    <h1>STL File Tests</h1>
+    <div id="results"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        // Copy parser functions from app.js
+        function isASCIISTL(arrayBuffer) {
+            const view = new Uint8Array(arrayBuffer);
+            const header = new TextDecoder().decode(view.slice(0, 5));
+            return header === 'solid';
+        }
+
+        function parseBinarySTL(view) {
+            try {
+                const faces = view.getUint32(80, true);
+                const vertices = [];
+                const normals = [];
+
+                let offset = 84;
+                const expectedSize = 84 + faces * 50;
+
+                if (view.byteLength < expectedSize) {
+                    throw new Error(`File too small. Expected at least ${expectedSize} bytes, got ${view.byteLength}`);
+                }
+
+                for (let i = 0; i < faces; i++) {
+                    const nx = view.getFloat32(offset, true); offset += 4;
+                    const ny = view.getFloat32(offset, true); offset += 4;
+                    const nz = view.getFloat32(offset, true); offset += 4;
+
+                    for (let j = 0; j < 3; j++) {
+                        vertices.push(view.getFloat32(offset, true)); offset += 4;
+                        vertices.push(view.getFloat32(offset, true)); offset += 4;
+                        vertices.push(view.getFloat32(offset, true)); offset += 4;
+                        normals.push(nx, ny, nz);
+                    }
+                    offset += 2;
+                }
+
+                if (vertices.length === 0) {
+                    throw new Error('No vertices parsed');
+                }
+
+                return { vertices: vertices.length / 3, faces };
+            } catch (error) {
+                throw new Error(`Binary parse error: ${error.message}`);
+            }
+        }
+
+        function parseASCIISTL(data) {
+            const facetPattern = /facet normal\s+([-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?)\s+([-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?)\s+([-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?)\s+outer loop\s+((?:vertex.*?\n)*?)\s+endloop/g;
+            const vertexPattern = /vertex\s+([-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?)\s+([-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?)\s+([-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?)/g;
+
+            let vertices = 0;
+            let faces = 0;
+            let facetMatch;
+
+            while ((facetMatch = facetPattern.exec(data)) !== null) {
+                faces++;
+                const vertexBlock = facetMatch[6];
+                let vertexMatch;
+                const blockPattern = /vertex\s+([-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?)\s+([-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?)\s+([-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?)/g;
+                while ((vertexMatch = blockPattern.exec(vertexBlock)) !== null) {
+                    vertices++;
+                }
+            }
+
+            if (vertices === 0) {
+                throw new Error('No vertices found in ASCII STL');
+            }
+
+            return { vertices, faces };
+        }
+
+        async function testFile(filename) {
+            try {
+                const response = await fetch(filename);
+                if (!response.ok) throw new Error('File not found');
+
+                const arrayBuffer = await response.arrayBuffer();
+                const isASCII = isASCIISTL(arrayBuffer);
+                let result;
+
+                if (isASCII) {
+                    const text = new TextDecoder().decode(arrayBuffer);
+                    result = parseASCIISTL(text);
+                } else {
+                    const view = new DataView(arrayBuffer);
+                    result = parseBinarySTL(view);
+                }
+
+                return {
+                    status: 'success',
+                    filename,
+                    format: isASCII ? 'ASCII' : 'Binary',
+                    ...result
+                };
+            } catch (error) {
+                return {
+                    status: 'error',
+                    filename,
+                    error: error.message
+                };
+            }
+        }
+
+        async function runTests() {
+            const files = ['test-cube.stl', 'test1.stl', 'test2.stl', 'test3.stl', 'test4.stl'];
+            const resultsDiv = document.getElementById('results');
+
+            for (const file of files) {
+                const result = await testFile(file);
+                const div = document.createElement('div');
+                div.className = `test-result ${result.status}`;
+
+                if (result.status === 'success') {
+                    div.innerHTML = `
+                        <strong>✓ ${result.filename}</strong><br>
+                        Format: ${result.format}<br>
+                        Vertices: ${result.vertices}<br>
+                        Faces: ${result.faces}
+                    `;
+                } else {
+                    div.innerHTML = `
+                        <strong>✗ ${result.filename}</strong><br>
+                        Error: ${result.error}
+                    `;
+                }
+
+                resultsDiv.appendChild(div);
+            }
+        }
+
+        runTests();
+    </script>
+</body>
+</html>
